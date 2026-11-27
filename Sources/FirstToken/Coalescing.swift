@@ -20,8 +20,8 @@ public protocol CoalescingStrategy: Sendable {
 /// committed the moment it arrives; deltas inside the frame window are held and committed
 /// together on the next frame.
 ///
-/// Guarantees (tested): the first delta is never held; at most one commit per frame interval
-/// except for buffer-limit flushes; the concatenation of commits equals the concatenation of
+/// Guarantees (tested): the first visible delta is never held, even after a whitespace-only
+/// lead; at most one glyph-bearing commit per frame interval except for buffer-limit flushes; the concatenation of commits equals the concatenation of
 /// inputs; held text is flushed as soon as it reaches `maxBufferedBytes`.
 public struct LeadingEdgeCoalescer: CoalescingStrategy {
     public let frameInterval: UInt64
@@ -44,7 +44,9 @@ public struct LeadingEdgeCoalescer: CoalescingStrategy {
     public mutating func ingest(_ text: String, at now: UInt64) -> String? {
         guard !text.isEmpty else { return nil }
         if buffer.isEmpty, windowIsOpen(at: now) {
-            lastCommit = now
+            // Only a commit that puts a glyph on screen spends the frame: a whitespace-only
+            // lead ("\n") must not make the first visible delta wait for the next frame.
+            if text.containsGlyph { lastCommit = now }
             return text
         }
         buffer += text
@@ -75,7 +77,7 @@ public struct LeadingEdgeCoalescer: CoalescingStrategy {
         let out = buffer
         buffer = ""
         bufferedBytes = 0
-        lastCommit = now
+        if out.containsGlyph { lastCommit = now }
         return out
     }
 }

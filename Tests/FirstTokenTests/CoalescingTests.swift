@@ -10,6 +10,13 @@ final class CoalescingTests: XCTestCase {
         XCTAssertFalse(c.isHoldingText)
     }
 
+    func testAWhitespaceLeadDoesNotMakeTheFirstVisibleDeltaWait() {
+        var c = LeadingEdgeCoalescer(frameInterval: frame)
+        XCTAssertEqual(c.ingest("\n", at: 0), "\n")
+        XCTAssertEqual(c.ingest("Hi", at: 1_000), "Hi", "the newline must not spend the frame")
+        XCTAssertNil(c.ingest("!", at: 2_000), "the glyph commit did spend it")
+    }
+
     func testTrailingEdgeHoldsTheFirstDeltaUntilTheNextFrame() {
         var c = TrailingEdgeCoalescer()
         XCTAssertNil(c.ingest("Hel", at: 1_000))
