@@ -94,8 +94,11 @@ public struct SendResult: Sendable, Equatable {
 /// ships a draft the user may never have meant to send. What it does ask for, under a budget:
 ///
 /// - a warm connection when the composer gains focus (DNS + TCP + TLS is often the largest
-///   client-controllable stage on a cold request), at most `maxWarmups` per window;
-/// - assembles the prompt locally when typing pauses, at most `maxAssemblies` per window,
+///   client-controllable stage on a cold request), in bursts of up to `maxWarmups`, refilled
+///   at `maxWarmups` per `warmupWindow` (a token bucket: at most 2 × maxWarmups − 1 in any
+///   one window);
+/// - assembles the prompt when typing pauses, under the same kind of bucket for
+///   `maxAssemblies` per `assemblyWindow`,
 ///   and discards it the moment the draft changes;
 /// - tracks hits, misses and waste, so the hit rate can justify (or kill) the feature.
 public struct PrewarmPolicy: Sendable {

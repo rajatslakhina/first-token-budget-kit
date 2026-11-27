@@ -255,7 +255,7 @@ public enum FixtureReplayer {
 /// `timeScalePermille`; 1,000 = recorded speed), each chunk at an absolute deadline from the
 /// first pull. Time before that first pull (the consumer starting the pipeline) is not part
 /// of the fixture's offsets, so in a live run it shows up in `firstToken`. The demo feeds
-/// this into `StreamPipeline` exactly as it would feed `URLSession` bytes.
+/// this into `StreamPipeline.deltas(from:)` as it would any chunked network source.
 public struct FixtureByteStream: AsyncSequence, Sendable {
     public typealias Element = [UInt8]
 

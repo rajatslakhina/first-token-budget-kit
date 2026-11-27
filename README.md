@@ -11,7 +11,7 @@ In the replay harness (cellular profile, 4 streams × 10 seeds, the same network
 
 <p align="center"><img src="https://raw.githubusercontent.com/rajatslakhina/first-token-budget-demo-app/main/Demo/Screenshots/1-waterfall.png" width="300" alt="The demo's waterfall: four client configurations with per-stage bars, p50/p95 and regression-gate verdicts"></p>
 
-Demo app: **[first-token-budget-demo-app](https://github.com/rajatslakhina/first-token-budget-demo-app)**. It pulls this package from GitHub as a remote dependency (1.3.3 up to the next major) and runs the whole pipeline on a Simulator: a replayed waterfall, a live stream, and the speculation policy.
+Demo app: **[first-token-budget-demo-app](https://github.com/rajatslakhina/first-token-budget-demo-app)**. It pulls this package from GitHub as a remote dependency (1.3.4 up to the next major) and runs the whole pipeline on a Simulator: a replayed waterfall, a live stream, and the speculation policy.
 
 ## Why this matters
 
@@ -85,7 +85,7 @@ The deliverable is a split you can assign. "TTFT regressed 30 ms" is not actiona
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/rajatslakhina/first-token-budget-kit.git", from: "1.3.3"),
+    .package(url: "https://github.com/rajatslakhina/first-token-budget-kit.git", from: "1.3.4"),
 ]
 ```
 

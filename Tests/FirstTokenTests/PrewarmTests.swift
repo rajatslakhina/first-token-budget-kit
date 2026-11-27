@@ -18,7 +18,7 @@ final class PrewarmTests: XCTestCase {
         var p = PrewarmPolicy(configuration: .init(connectionIdleTimeout: 1, maxWarmups: 2, warmupWindow: ms(60_000)))
         XCTAssertEqual(p.handle(.composerFocused, at: ms(1)), [.warmConnection])
         XCTAssertEqual(p.handle(.composerFocused, at: ms(2)), [.warmConnection])
-        XCTAssertEqual(p.handle(.composerFocused, at: ms(3)), [], "third warm-up in the window is refused")
+        XCTAssertEqual(p.handle(.composerFocused, at: ms(3)), [], "the burst is spent; refused until a token refills")
         XCTAssertEqual(p.stats.deniedByBudget, 1)
         XCTAssertEqual(p.handle(.composerFocused, at: ms(31_000)), [.warmConnection], "one token refilled after window/2")
     }
