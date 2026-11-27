@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build + test (macOS, warnings as errors)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+      - name: Build from a clean checkout, warnings as errors
+        run: swift build -Xswiftc -warnings-as-errors
+      - name: Test (includes the TTFT regression gate)
+        run: swift test -Xswiftc -warnings-as-errors
+
+  ios:
+    name: iOS Simulator build
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the library for the iOS Simulator SDK
+        run: >
+          xcodebuild build
+          -scheme FirstToken
+          -destination 'generic/platform=iOS Simulator'
+          SWIFT_TREAT_WARNINGS_AS_ERRORS=YES
+
+  mutation:
+    name: Mutation check (each guard must be caught by its test)
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - name: Apply each mutant, run its test, require a test failure
+        run: python3 Scripts/mutation_check.py

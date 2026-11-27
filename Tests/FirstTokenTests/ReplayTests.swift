@@ -1,0 +1,100 @@
+@testable import FirstToken
+import Foundation
+import XCTest
+
+final class ReplayTests: XCTestCase {
+    private let seeds: Range<UInt64> = 0..<10
+
+    func testReplayIsDeterministicPerSeedAndVariesAcrossSeeds() {
+        let a = FixtureReplayer.run(.steady, configuration: .shipped, seed: 4)
+        let b = FixtureReplayer.run(.steady, configuration: .shipped, seed: 4)
+        let c = FixtureReplayer.run(.steady, configuration: .shipped, seed: 5)
+        XCTAssertEqual(a, b)
+        XCTAssertNotEqual(a.breakdown?.total, c.breakdown?.total)
+    }
+
+    func testEveryFixtureAndStrategyCommitsTheWholeAnswerWithoutTruncation() {
+        for fixture in StreamFixture.standard {
+            for kind in CoalescerKind.allCases {
+                let config = ReplayConfiguration(prewarmConnection: false, speculativePromptHit: false, coalescer: kind)
+                let result = FixtureReplayer.run(fixture, configuration: config, seed: 1)
+                let expected = fixture.name == "whitespace-lead" ? "\n" + StreamFixture.sampleAnswer : StreamFixture.sampleAnswer
+                XCTAssertEqual(result.committedText, expected, "\(fixture.name) \(kind)")
+                XCTAssertFalse(result.truncated)
+                XCTAssertNotNil(result.breakdown)
+                XCTAssertEqual(result.deltas.last, .messageStop)
+            }
+        }
+    }
+
+    func testTheSplitFirstDeltaIsOnlyAvailableWhenItsSecondHalfArrives() throws {
+        let config = ReplayConfiguration(profile: .init(requestBuild: 0, coldConnect: 0, warmConnect: 0, serverQueue: 0, jitterPermille: 0),
+                                         prewarmConnection: false, speculativePromptHit: false, coalescer: .leadingEdge)
+        let split = try XCTUnwrap(FixtureReplayer.run(.splitFirstDelta, configuration: config, seed: 0).breakdown)
+        XCTAssertEqual(split.duration(of: .firstToken), Nanos.milliseconds(190), "150 ms + the 40 ms gap")
+    }
+
+    func testRenderWaitsForAVisibleGlyphNotTheFirstDelta() throws {
+        let config = ReplayConfiguration(profile: .init(requestBuild: 0, coldConnect: 0, warmConnect: 0, serverQueue: 0, jitterPermille: 0),
+                                         prewarmConnection: false, speculativePromptHit: false, coalescer: .leadingEdge)
+        let lead = try XCTUnwrap(FixtureReplayer.run(.whitespaceLead, configuration: config, seed: 0).breakdown)
+        XCTAssertGreaterThanOrEqual(lead.duration(of: .render), Nanos.milliseconds(22), "the glyph comes one delta (22 ms) later")
+    }
+
+    func testLeadingEdgeNeverRendersLaterThanTrailingEdgeOnTheSameRun() throws {
+        for fixture in StreamFixture.standard {
+            for seed in seeds {
+                var config = ReplayConfiguration.naive
+                let trailing = try XCTUnwrap(FixtureReplayer.run(fixture, configuration: config, seed: seed).breakdown)
+                config.coalescer = .leadingEdge
+                let leading = try XCTUnwrap(FixtureReplayer.run(fixture, configuration: config, seed: seed).breakdown)
+                XCTAssertLessThanOrEqual(leading.duration(of: .render), trailing.duration(of: .render))
+                XCTAssertEqual(leading.duration(of: .serverQueue), trailing.duration(of: .serverQueue), "same seed, same network")
+            }
+        }
+    }
+
+    func testSpeculativeHitPrepaysRequestBuild() throws {
+        let b = try XCTUnwrap(FixtureReplayer.run(.steady, configuration: .shipped, seed: 0).breakdown)
+        XCTAssertTrue(b.isPrepaid(.requestBuild))
+        XCTAssertEqual(b.duration(of: .requestBuild), 0)
+        XCTAssertTrue(b.orderingViolations.isEmpty)
+    }
+
+    func testFullJitterAndZeroFrameIntervalDoNotTrap() {
+        let config = ReplayConfiguration(profile: .init(requestBuild: .max, coldConnect: .max, warmConnect: 0, serverQueue: .max, jitterPermille: 5_000),
+                                         prewarmConnection: false, speculativePromptHit: false, coalescer: .trailingEdge, frameInterval: 0)
+        let result = FixtureReplayer.run(.steady, configuration: config, seed: 1)
+        XCTAssertEqual(config.frameInterval, 1)
+        XCTAssertEqual(result.committedText, StreamFixture.sampleAnswer)
+    }
+
+    func testAFixtureWithNoVisibleTextHasNoBreakdown() {
+        let empty = StreamFixture(name: "empty", chunks: [FixtureChunk(offset: 0, bytes: Array("event: ping\ndata: {\"type\":\"ping\"}\n\n".utf8))])
+        let result = FixtureReplayer.run(empty, configuration: .shipped, seed: 0)
+        XCTAssertNil(result.breakdown)
+        XCTAssertEqual(result.timeline.missing, [.firstTextDelta, .firstGlyphRendered])
+        XCTAssertTrue(FixtureReplayer.totals([empty], configuration: .shipped, seeds: seeds).isEmpty)
+    }
+
+    func testRealTimePlaybackPreservesBytesAndOrder() async throws {
+        var collected: [UInt8] = []
+        for try await chunk in FixtureByteStream(.crlfWithKeepAlives, timeScalePermille: 10) { collected += chunk }
+        XCTAssertEqual(collected, StreamFixture.crlfWithKeepAlives.chunks.flatMap(\.bytes))
+    }
+
+    /// Prints fresh baseline numbers. Run with FIRSTTOKEN_PRINT_BASELINE=1 after an
+    /// intentional pipeline change, review the diff, and update `TTFTBaseline`.
+    func testPrintBaselineWhenRequested() {
+        guard ProcessInfo.processInfo.environment["FIRSTTOKEN_PRINT_BASELINE"] == "1" else { return }
+        for (name, config) in [("shipped", ReplayConfiguration.shipped), ("naive", ReplayConfiguration.naive)] {
+            let b = FixtureReplayer.breakdowns(StreamFixture.standard, configuration: config, seeds: seeds)
+            let totals = b.map(\.total)
+            print("BASELINE \(name) total p50=\(Percentile.nearestRank(totals, percentile: 50) ?? 0) p95=\(Percentile.nearestRank(totals, percentile: 95) ?? 0) n=\(b.count)")
+            for stage in Stage.allCases {
+                let values = b.map { $0.duration(of: stage) }
+                print("BASELINE \(name) \(stage) p50=\(Percentile.nearestRank(values, percentile: 50) ?? 0) p95=\(Percentile.nearestRank(values, percentile: 95) ?? 0)")
+            }
+        }
+    }
+}
