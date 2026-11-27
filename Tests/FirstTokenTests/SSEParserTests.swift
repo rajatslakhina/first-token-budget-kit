@@ -85,6 +85,19 @@ final class SSEParserTests: XCTestCase {
         XCTAssertEqual(parser.oversizeEventsDropped, 1)
     }
 
+    func testAFloodOfEmptyDataLinesIsBoundedByTheSeparators() {
+        var parser = SSEParser(maxEventBytes: 10)
+        let events = parser.feed(Array((String(repeating: "data:\n", count: 100) + "\ndata: ok\n\n").utf8))
+        XCTAssertEqual(events.map(\.data), ["ok"], "100 empty data lines join to 99 bytes of separators")
+        XCTAssertEqual(parser.oversizeEventsDropped, 1)
+    }
+
+    func testAnOversizeLineAfterGoodDataDropsTheWholeEvent() {
+        var parser = SSEParser(maxEventBytes: 16)
+        let events = parser.feed(Array("data: a\ndata: \(String(repeating: "x", count: 40))\n\ndata: ok\n\n".utf8))
+        XCTAssertEqual(events.map(\.data), ["ok"], "the earlier `a` must not be delivered on its own")
+    }
+
     func testFinishReportsAStreamCutMidEvent() {
         var cut = SSEParser()
         _ = cut.feed(Array("data: half".utf8))

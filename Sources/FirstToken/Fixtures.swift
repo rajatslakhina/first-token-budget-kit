@@ -48,6 +48,10 @@ extension StreamFixture {
         name: "whitespace-lead", firstText: Nanos.milliseconds(160), leadingWhitespace: true
     )
 
+    /// Deltas 4 ms apart, faster than a 60 Hz frame, so coalescing is visible: several
+    /// deltas land in one commit. Not part of `standard` (the gate baselines don't include it).
+    public static let burst = make(name: "burst", firstText: Nanos.milliseconds(170), interDelta: Nanos.milliseconds(4))
+
     /// Splits `text` into deltas of a repeating 3-11 character pattern, never inside a
     /// Character, so each delta is a valid string the way the API sends them.
     static func deltas(of text: String) -> [String] {

@@ -119,9 +119,11 @@ public struct SSEParser: Sendable {
         case "event":
             eventType = text
         case "data":
-            eventBytes = eventBytes > maxEventBytes - value.count
+            // Charge the "\n" join separator too, so a flood of empty `data:` lines is bounded.
+            let cost = value.count + (dataLines.isEmpty ? 0 : 1)
+            eventBytes = eventBytes > maxEventBytes - min(cost, maxEventBytes)
                 ? maxEventBytes + 1
-                : eventBytes + value.count
+                : eventBytes + cost
             if eventBytes > maxEventBytes {
                 eventPoisoned = true
                 dataLines.removeAll()

@@ -7,8 +7,13 @@ import Foundation
 /// re-rendered as tokens arrive. Without this split, every delta re-parses the whole answer
 /// and a long reply gets slower to update the longer it gets.
 ///
-/// Segmentation is incremental: the scanner resumes at the first line it has not yet
-/// classified, so each appended byte is scanned once (tested via `scannedBytes`).
+/// Segmentation is incremental and linear: the newline search resumes where the previous
+/// append stopped (even in the middle of an unterminated line), so each appended byte is
+/// searched once, and each completed line is classified once (tested via `scannedBytes`).
+///
+/// Fences follow CommonMark's rule: a fence opened with N backticks (or tildes) closes only on
+/// a line of at least N of the same marker followed by nothing but whitespace, so a
+/// "```python" line inside a ``` block does not close it.
 ///
 /// Conservation (tested): `closed.joined() + tail` is exactly the text appended so far.
 /// Separators stay inside the block that precedes them.
@@ -19,11 +24,18 @@ public struct IncrementalMarkdownDocument: Sendable, Equatable {
     // Scanner state for the tail. `scanOffset` is the UTF-8 offset of the first byte of the
     // first unscanned line.
     private var scanOffset = 0
-    private var fenceByte: UInt8?
+    // UTF-8 offset of the first byte the newline search has not looked at yet.
+    private var searchOffset = 0
+    private struct Fence: Sendable, Equatable {
+        let marker: UInt8
+        let length: Int
+    }
+
+    private var openFence: Fence?
     private var blockHasContent = false
 
-    /// Bytes the scanner has examined in total. Internal: used by tests to prove the scan is
-    /// incremental.
+    /// Bytes the newline search has examined in total. Internal: used by tests to prove the
+    /// scan is linear.
     private(set) var scannedBytes = 0
 
     public init() {}
@@ -47,31 +59,41 @@ public struct IncrementalMarkdownDocument: Sendable, Equatable {
         }
         tail = ""
         scanOffset = 0
-        fenceByte = nil
+        searchOffset = 0
+        openFence = nil
         blockHasContent = false
     }
 
     private mutating func scan() {
         let utf8 = tail.utf8
-        var lineStart = utf8.index(utf8.startIndex, offsetBy: scanOffset, limitedBy: utf8.endIndex) ?? utf8.endIndex
+        func index(_ offset: Int) -> String.Index {
+            utf8.index(utf8.startIndex, offsetBy: offset, limitedBy: utf8.endIndex) ?? utf8.endIndex
+        }
+        var lineStart = index(scanOffset)
+        var searchFrom = index(max(searchOffset, scanOffset))
         var blockStart = utf8.startIndex
         var cut = false
 
-        while let newline = utf8[lineStart...].firstIndex(of: 0x0A) {
-            let lineBytes = utf8[lineStart..<newline]
-            let afterLine = utf8.index(after: newline)
-            let length = utf8.distance(from: lineStart, to: afterLine)
-            scannedBytes = scannedBytes > Int.max - length ? Int.max : scannedBytes + length
+        func countSearched(_ from: String.Index, _ to: String.Index) {
+            let n = utf8.distance(from: from, to: to)
+            scannedBytes = scannedBytes > Int.max - n ? Int.max : scannedBytes + n
+        }
 
-            if let marker = Self.fenceMarker(lineBytes) {
-                if fenceByte == nil {
-                    fenceByte = marker
-                } else if fenceByte == marker {
-                    fenceByte = nil
+        while let newline = utf8[searchFrom...].firstIndex(of: 0x0A) {
+            let afterLine = utf8.index(after: newline)
+            countSearched(searchFrom, afterLine)
+            let lineBytes = utf8[lineStart..<newline]
+
+            if let fence = openFence {
+                if Self.closesFence(lineBytes, marker: fence.marker, length: fence.length) {
+                    openFence = nil
                 }
                 blockHasContent = true
+            } else if let opening = Self.fenceOpening(lineBytes) {
+                openFence = opening
+                blockHasContent = true
             } else if lineBytes.allSatisfy({ $0 == 0x20 || $0 == 0x09 || $0 == 0x0D }) {
-                if fenceByte == nil, blockHasContent {
+                if blockHasContent {
                     // Cuts are made directly after an ASCII newline, which is always a
                     // scalar and grapheme boundary, so this slice never splits a character.
                     closed.append(String(tail[blockStart..<afterLine]))
@@ -83,23 +105,33 @@ public struct IncrementalMarkdownDocument: Sendable, Equatable {
                 blockHasContent = true
             }
             lineStart = afterLine
+            searchFrom = afterLine
         }
+        countSearched(searchFrom, utf8.endIndex)
 
         scanOffset = utf8.distance(from: blockStart, to: lineStart)
+        searchOffset = utf8.distance(from: blockStart, to: utf8.endIndex)
         if cut {
             tail = String(tail[blockStart...])
         }
     }
 
-    /// The fence byte (` or ~) if the line opens or closes a fenced code block: up to three
-    /// spaces of indentation, then at least three of the same marker.
-    private static func fenceMarker<Line: Collection>(_ line: Line) -> UInt8? where Line.Element == UInt8 {
+    /// An opening fence: up to three spaces, then at least three backticks or tildes.
+    private static func fenceOpening<Line: Collection>(_ line: Line) -> Fence? where Line.Element == UInt8 {
         let indent = line.prefix(while: { $0 == 0x20 }).count
-        guard indent <= 3 else { return nil }
-        let head = Array(line.dropFirst(indent).prefix(3))
-        guard head.count == 3, let first = head.first, first == 0x60 || first == 0x7E,
-              head.allSatisfy({ $0 == first }) else { return nil }
-        return first
+        guard indent <= 3, let first = line.dropFirst(indent).first, first == 0x60 || first == 0x7E else { return nil }
+        let run = line.dropFirst(indent).prefix(while: { $0 == first }).count
+        return run >= 3 ? Fence(marker: first, length: run) : nil
+    }
+
+    /// A closing fence: up to three spaces, at least `length` of `marker`, then only whitespace.
+    private static func closesFence<Line: Collection>(_ line: Line, marker: UInt8, length: Int) -> Bool where Line.Element == UInt8 {
+        let indent = line.prefix(while: { $0 == 0x20 }).count
+        guard indent <= 3 else { return false }
+        let rest = line.dropFirst(indent)
+        let run = rest.prefix(while: { $0 == marker }).count
+        guard run >= length else { return false }
+        return rest.dropFirst(run).allSatisfy { $0 == 0x20 || $0 == 0x09 || $0 == 0x0D }
     }
 }
 

@@ -99,6 +99,22 @@ public struct ReplayResult: Sendable, Equatable {
     public let truncated: Bool
 }
 
+/// The committed regression baseline: `ReplayConfiguration.shipped` over
+/// `StreamFixture.standard` and seeds `0..<10` (40 runs). Tests assert it still matches the
+/// replay exactly, so changing the pipeline's behaviour means re-recording these numbers in
+/// the same change, where a reviewer sees them move.
+public enum ReplayBaseline {
+    public static let seeds: Range<UInt64> = 0..<10
+    public static let total = GateBaseline(p50: 499_942_335, p95: 591_057_358)
+    /// The client-owned stages. `serverQueue` and `firstToken` belong to the API and to the
+    /// fixtures; gating them would gate the fixture, not the client.
+    public static let stages: [Stage: GateBaseline] = [
+        .requestBuild: GateBaseline(p50: 0, p95: 0),
+        .connection: GateBaseline(p50: 4_076_000, p95: 4_868_000),
+        .render: GateBaseline(p50: 11_688_389, p95: 33_024_218),
+    ]
+}
+
 /// Replays a fixture through the real parser, decoder and coalescer under virtual time.
 ///
 /// What is real: SSE framing and chunk boundaries (a delta split across two reads is only
@@ -126,20 +142,25 @@ public enum FixtureReplayer {
         let send = sendTime
         timeline.mark(.sendCommitted, at: send)
 
+        // Every jitter is drawn unconditionally and in a fixed order, so two configurations
+        // replayed with the same seed see the same network: only the client differs.
+        let buildCost = jittered(profile.requestBuild)
+        let connectCost = jittered(configuration.prewarmConnection ? profile.warmConnect : profile.coldConnect)
+        let queueCost = jittered(profile.serverQueue)
         let built = configuration.speculativePromptHit
             ? Saturating.sub(send, Nanos.milliseconds(1))
-            : Saturating.add(send, jittered(profile.requestBuild))
+            : Saturating.add(send, buildCost)
         timeline.mark(.requestBuilt, at: built)
 
-        let connectCost = configuration.prewarmConnection ? profile.warmConnect : profile.coldConnect
-        let ready = Saturating.add(max(built, send), jittered(connectCost))
+        let ready = Saturating.add(max(built, send), connectCost)
         timeline.mark(.connectionReady, at: ready)
 
-        let headers = Saturating.add(ready, jittered(profile.serverQueue))
+        let headers = Saturating.add(ready, queueCost)
         timeline.mark(.headersReceived, at: headers)
 
         let streamFactor = 1_000 - jitter + rng.next() % (2 * jitter + 1)
-        let frame = configuration.frameInterval
+        // `frameInterval` is a public `var`; `init` clamps it, but a caller can still set 0.
+        let frame = max(1, configuration.frameInterval)
         let phase = rng.next() % frame
         // Display refreshes happen at phase + k * frame.
         func firstTick(after time: UInt64) -> UInt64 {

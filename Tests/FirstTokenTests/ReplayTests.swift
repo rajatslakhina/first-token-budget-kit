@@ -54,6 +54,31 @@ final class ReplayTests: XCTestCase {
         }
     }
 
+    /// Configurations replayed with the same seed must see the same network, or a comparison
+    /// between them measures the random draws instead of the client.
+    func testAllConfigurationsSeeTheSameNetworkForTheSameSeed() throws {
+        let configs: [ReplayConfiguration] = [
+            .naive,
+            ReplayConfiguration(prewarmConnection: false, speculativePromptHit: false, coalescer: .leadingEdge),
+            ReplayConfiguration(prewarmConnection: true, speculativePromptHit: false, coalescer: .leadingEdge),
+            .shipped,
+        ]
+        for fixture in StreamFixture.standard {
+            for seed in seeds {
+                let runs = try configs.map { try XCTUnwrap(FixtureReplayer.run(fixture, configuration: $0, seed: seed).breakdown) }
+                XCTAssertEqual(Set(runs.map { $0.duration(of: .serverQueue) }).count, 1, "\(fixture.name) seed \(seed)")
+                XCTAssertEqual(Set(runs.map { $0.duration(of: .firstToken) }).count, 1, "\(fixture.name) seed \(seed)")
+            }
+        }
+    }
+
+    func testBurstDeltasAreCoalescedIntoFewerCommits() {
+        let result = FixtureReplayer.run(.burst, configuration: .shipped, seed: 0)
+        let textDeltas = result.deltas.filter { $0.text != nil }.count
+        XCTAssertEqual(result.committedText, StreamFixture.sampleAnswer)
+        XCTAssertLessThan(result.commits * 2, textDeltas, "4 ms deltas against 16.7 ms frames")
+    }
+
     func testSpeculativeHitPrepaysRequestBuild() throws {
         let b = try XCTUnwrap(FixtureReplayer.run(.steady, configuration: .shipped, seed: 0).breakdown)
         XCTAssertTrue(b.isPrepaid(.requestBuild))
@@ -67,6 +92,12 @@ final class ReplayTests: XCTestCase {
         let result = FixtureReplayer.run(.steady, configuration: config, seed: 1)
         XCTAssertEqual(config.frameInterval, 1)
         XCTAssertEqual(result.committedText, StreamFixture.sampleAnswer)
+    }
+
+    func testAFrameIntervalSetToZeroAfterInitDoesNotTrap() {
+        var config = ReplayConfiguration.shipped
+        config.frameInterval = 0
+        XCTAssertEqual(FixtureReplayer.run(.steady, configuration: config, seed: 0).committedText, StreamFixture.sampleAnswer)
     }
 
     func testAFixtureWithNoVisibleTextHasNoBreakdown() {
@@ -87,7 +118,12 @@ final class ReplayTests: XCTestCase {
     /// intentional pipeline change, review the diff, and update `TTFTBaseline`.
     func testPrintBaselineWhenRequested() {
         guard ProcessInfo.processInfo.environment["FIRSTTOKEN_PRINT_BASELINE"] == "1" else { return }
-        for (name, config) in [("shipped", ReplayConfiguration.shipped), ("naive", ReplayConfiguration.naive)] {
+        var trailing = ReplayConfiguration.shipped
+        trailing.coalescer = .trailingEdge
+        var noSpeculation = ReplayConfiguration.shipped
+        noSpeculation.speculativePromptHit = false
+        for (name, config) in [("shipped", ReplayConfiguration.shipped), ("naive", ReplayConfiguration.naive),
+                               ("shipped-trailing", trailing), ("shipped-no-speculation", noSpeculation)] {
             let b = FixtureReplayer.breakdowns(StreamFixture.standard, configuration: config, seeds: seeds)
             let totals = b.map(\.total)
             print("BASELINE \(name) total p50=\(Percentile.nearestRank(totals, percentile: 50) ?? 0) p95=\(Percentile.nearestRank(totals, percentile: 95) ?? 0) n=\(b.count)")

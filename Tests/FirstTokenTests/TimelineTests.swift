@@ -117,6 +117,15 @@ final class TimelineTests: XCTestCase {
         XCTAssertNil(afterReset)
     }
 
+    func testInstrumentCanStampWithACallerTakenReading() async throws {
+        let instrument = TTFTInstrument(clock: ManualClock(start: 999))
+        for (offset, milestone) in Milestone.allCases.enumerated() {
+            await instrument.mark(milestone, at: UInt64(offset) * 7)
+        }
+        let measured = await instrument.breakdown()
+        XCTAssertEqual(try XCTUnwrap(measured).total, 35, "the actor's own clock (999) is not used")
+    }
+
     func testBudgetReportsOverrunsAndTheDominantStage() throws {
         let t = timeline([
             .sendCommitted: ms(0) + 1, .requestBuilt: ms(50) + 1, .connectionReady: ms(250) + 1,

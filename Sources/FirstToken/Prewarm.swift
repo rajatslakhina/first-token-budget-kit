@@ -55,12 +55,17 @@ public enum IntentSignal: Sendable, Equatable {
     case composerDismissed
 }
 
-/// Work the policy asks the app to do. None of it sends the draft anywhere.
+/// Work the policy asks the app to do. None of it sends the draft or bills tokens.
 public enum PrewarmAction: Sendable, Equatable {
-    /// Open (or touch) the connection to the API host, with no request on it.
+    /// Get a warm connection to the API host. `URLSession` has no public pre-connect, so in
+    /// practice this is a lightweight request that carries no draft (for example a `HEAD` to
+    /// the same host), whose HTTP/2 or HTTP/3 connection the real request then reuses. The
+    /// host does see it, and with it the fact that the user opened the composer.
     case warmConnection
-    /// Assemble and encode the prompt for this draft locally (system prompt, retrieval,
-    /// tokenisation), ready to send.
+    /// Assemble and encode the prompt for this draft (system prompt, retrieval, encoding),
+    /// ready to send. This is local work only if retrieval is on-device; a remote retrieval
+    /// call on a draft is itself speculation that ships draft text, and needs the same
+    /// consent rule as sending.
     case assemblePrompt(digest: UInt64)
     /// Throw away a speculative prompt that no longer matches the draft.
     case discardSpeculativePrompt(digest: UInt64)
@@ -84,12 +89,12 @@ public struct SendResult: Sendable, Equatable {
 
 /// Decides when to pre-warm the connection and speculatively assemble the prompt.
 ///
-/// The design line: speculation stops at the network boundary. The policy never sends a
-/// request before the user taps send, because a speculative API call bills tokens and ships a
-/// draft the user may never have meant to send. What it does do, under a budget:
+/// The design line: the draft never leaves the device before the user taps send. The policy
+/// never asks for the model request early, because a speculative API call bills tokens and
+/// ships a draft the user may never have meant to send. What it does ask for, under a budget:
 ///
-/// - opens the connection when the composer gains focus (DNS + TCP + TLS is often the
-///   largest client-controllable stage on a cold request), at most `maxWarmups` per window;
+/// - a warm connection when the composer gains focus (DNS + TCP + TLS is often the largest
+///   client-controllable stage on a cold request), at most `maxWarmups` per window;
 /// - assembles the prompt locally when typing pauses, at most `maxAssemblies` per window,
 ///   and discards it the moment the draft changes;
 /// - tracks hits, misses and waste, so the hit rate can justify (or kill) the feature.

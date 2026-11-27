@@ -44,10 +44,13 @@ public struct AnthropicEventDecoder: Sendable {
         let error: ErrorBody?
     }
 
+    /// One decoder for the life of the stream, not one per event on the hot path.
+    private let json = JSONDecoder()
+
     public init() {}
 
     public func decode(_ event: SSEEvent) -> StreamDelta {
-        guard let envelope = try? JSONDecoder().decode(Envelope.self, from: Data(event.data.utf8)) else {
+        guard let envelope = try? json.decode(Envelope.self, from: Data(event.data.utf8)) else {
             return .malformed(event: event.event)
         }
         switch envelope.type {
@@ -81,11 +84,13 @@ public enum StreamPipelineError: Error, Sendable, Equatable {
     case truncated
 }
 
-/// Turns any `AsyncSequence` of byte chunks into a stream of decoded deltas.
+/// Turns a byte stream into a stream of decoded deltas.
 public enum StreamPipeline {
+    /// Deltas from any `AsyncSequence` of byte chunks (a fixture, a socket reader, a test).
+    ///
     /// Parsing and JSON decoding run on a detached task, never on the caller's actor, so a
     /// burst of deltas cannot hitch the main thread. Cancelling the consumer (or dropping the
-    /// stream) cancels the parsing task.
+    /// stream) cancels the parsing task, which stops pulling from the source.
     ///
     /// The returned stream buffers without bound. That is deliberate: dropping a text delta is
     /// data loss, and the intended consumer (a coalescer that appends to a string) drains far
@@ -96,6 +101,40 @@ public enum StreamPipeline {
         maxEventBytes: Int = 1 << 20,
         decoder: AnthropicEventDecoder = AnthropicEventDecoder()
     ) -> AsyncThrowingStream<StreamDelta, any Error> where Chunks.Element == [UInt8] {
+        deltas(from: chunks, maxEventBytes: maxEventBytes, decoder: decoder, parseObserver: nil)
+    }
+
+    /// Deltas from a byte-at-a-time sequence such as `URLSession.AsyncBytes`.
+    ///
+    /// The sequence is created by `makeBytes` inside the parsing task, so the request starts
+    /// off the caller's actor and the closure is the natural place to stamp `headersReceived`.
+    /// (`URLSession.AsyncBytes` is `Sendable`, as the constraint requires.)
+    ///
+    /// ```swift
+    /// StreamPipeline.deltas(bytes: {
+    ///     let (bytes, _) = try await session.bytes(for: request)
+    ///     await instrument.mark(.headersReceived)
+    ///     return bytes
+    /// })
+    /// ```
+    ///
+    /// Bytes are fed to the parser as they arrive, so an event is decoded the moment its
+    /// terminating blank line is read; nothing waits for a buffer to fill.
+    public static func deltas<Bytes: AsyncSequence & Sendable>(
+        bytes makeBytes: @escaping @Sendable () async throws -> Bytes,
+        maxEventBytes: Int = 1 << 20,
+        decoder: AnthropicEventDecoder = AnthropicEventDecoder()
+    ) -> AsyncThrowingStream<StreamDelta, any Error> where Bytes.Element == UInt8 {
+        deltas(bytes: makeBytes, maxEventBytes: maxEventBytes, decoder: decoder, parseObserver: nil)
+    }
+
+    /// Test seam: `parseObserver` runs inside the parse step, once per dispatched event.
+    static func deltas<Chunks: AsyncSequence & Sendable>(
+        from chunks: Chunks,
+        maxEventBytes: Int,
+        decoder: AnthropicEventDecoder,
+        parseObserver: (@Sendable () -> Void)?
+    ) -> AsyncThrowingStream<StreamDelta, any Error> where Chunks.Element == [UInt8] {
         AsyncThrowingStream { continuation in
             let task = Task.detached(priority: .userInitiated) {
                 var parser = SSEParser(maxEventBytes: maxEventBytes)
@@ -103,6 +142,40 @@ public enum StreamPipeline {
                     for try await chunk in chunks {
                         try Task.checkCancellation()
                         for event in parser.feed(chunk) {
+                            parseObserver?()
+                            continuation.yield(decoder.decode(event))
+                        }
+                    }
+                    if parser.finish() {
+                        continuation.finish(throwing: StreamPipelineError.truncated)
+                    } else {
+                        continuation.finish()
+                    }
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    static func deltas<Bytes: AsyncSequence & Sendable>(
+        bytes makeBytes: @escaping @Sendable () async throws -> Bytes,
+        maxEventBytes: Int,
+        decoder: AnthropicEventDecoder,
+        parseObserver: (@Sendable () -> Void)?
+    ) -> AsyncThrowingStream<StreamDelta, any Error> where Bytes.Element == UInt8 {
+        AsyncThrowingStream { continuation in
+            let task = Task.detached(priority: .userInitiated) {
+                var parser = SSEParser(maxEventBytes: maxEventBytes)
+                do {
+                    let bytes = try await makeBytes()
+                    for try await byte in bytes {
+                        let events = parser.feed(CollectionOfOne(byte))
+                        guard !events.isEmpty else { continue }
+                        try Task.checkCancellation()
+                        for event in events {
+                            parseObserver?()
                             continuation.yield(decoder.decode(event))
                         }
                     }

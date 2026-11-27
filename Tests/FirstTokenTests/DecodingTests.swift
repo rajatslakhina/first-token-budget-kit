@@ -55,20 +55,52 @@ final class DecodingTests: XCTestCase {
         }
     }
 
-    /// The parse loop must not run on the caller's actor. The source records which thread
-    /// its `next()` runs on while the test consumes from the main actor.
+    /// The parse step must not run on the caller's actor. The observer runs inside the
+    /// parse loop itself (not in the source), once per dispatched event.
     @MainActor
     func testParsingRunsOffTheMainThreadEvenWhenConsumedFromMainActor() async throws {
         let onMain = Mutex<[Bool]>([])
-        let source = RecordingChunks(chunks: StreamFixture.steady.chunks.map(\.bytes), record: { isMain in
-            onMain.withLock { $0.append(isMain) }
-        })
+        let observer: @Sendable () -> Void = { onMain.withLock { $0.append(pthread_main_np() != 0) } }
         var count = 0
-        for try await _ in StreamPipeline.deltas(from: source) { count += 1 }
-        XCTAssertGreaterThan(count, 0)
+        for try await _ in StreamPipeline.deltas(from: FixtureByteStream(.steady, timeScalePermille: 0), maxEventBytes: 1 << 20,
+                                                 decoder: AnthropicEventDecoder(), parseObserver: observer) {
+            count += 1
+        }
         let observed = onMain.withLock { $0 }
-        XCTAssertFalse(observed.isEmpty)
+        XCTAssertEqual(observed.count, count)
+        XCTAssertGreaterThan(count, 0)
         XCTAssertFalse(observed.contains(true))
+
+        onMain.withLock { $0.removeAll() }
+        for try await _ in StreamPipeline.deltas(bytes: { Self.byteStream(StreamFixture.steady) }, maxEventBytes: 1 << 20,
+                                                 decoder: AnthropicEventDecoder(), parseObserver: observer) {}
+        XCTAssertFalse(onMain.withLock { $0 }.isEmpty)
+        XCTAssertFalse(onMain.withLock { $0 }.contains(true))
+    }
+
+    static func byteStream(_ fixture: StreamFixture) -> AsyncStream<UInt8> {
+        AsyncStream { continuation in
+            for byte in fixture.chunks.flatMap(\.bytes) { continuation.yield(byte) }
+            continuation.finish()
+        }
+    }
+
+    func testByteSequencePipelineDeliversTheWholeAnswer() async throws {
+        var texts: [String] = []
+        for try await delta in StreamPipeline.deltas(bytes: { Self.byteStream(.crlfWithKeepAlives) }) {
+            if let text = delta.text { texts.append(text) }
+        }
+        XCTAssertEqual(texts.joined(), StreamFixture.sampleAnswer)
+    }
+
+    func testByteSequencePipelineReportsTruncation() async {
+        let cut = StreamFixture(name: "cut", chunks: [FixtureChunk(offset: 0, bytes: Array("data: {".utf8))])
+        do {
+            for try await _ in StreamPipeline.deltas(bytes: { Self.byteStream(cut) }) {}
+            XCTFail("expected truncation")
+        } catch {
+            XCTAssertEqual(error as? StreamPipelineError, .truncated)
+        }
     }
 
     func testCancellingTheConsumerStopsPullingFromTheSource() async throws {

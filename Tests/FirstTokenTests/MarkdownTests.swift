@@ -95,6 +95,30 @@ final class MarkdownTests: XCTestCase {
         XCTAssertEqual(doc.scannedBytes, total, "a rescanning implementation scans the tail again on every append")
     }
 
+    func testAnUnterminatedLineIsSearchedOnceNotOnEveryAppend() {
+        var doc = IncrementalMarkdownDocument()
+        for _ in 0..<2_000 { doc.append("a") }
+        XCTAssertEqual(doc.scannedBytes, 2_000, "re-searching the open line on each append is quadratic")
+        doc.append("\n\nnext")
+        XCTAssertEqual(doc.closed.count, 1)
+        XCTAssertEqual(doc.scannedBytes, 2_006)
+    }
+
+    func testAFenceLineWithAnInfoStringDoesNotCloseAnOpenFence() {
+        var doc = IncrementalMarkdownDocument()
+        doc.append("```\ncode\n```python\n\nstill code\n```\n\nafter")
+        XCTAssertEqual(doc.closed.count, 1)
+        XCTAssertTrue(doc.closed[0].hasSuffix("still code\n```\n\n"))
+        XCTAssertEqual(doc.tail, "after")
+    }
+
+    func testAShorterFenceDoesNotCloseALongerOne() {
+        var doc = IncrementalMarkdownDocument()
+        doc.append("````\n```\n\nstill code\n````\n\nafter")
+        XCTAssertEqual(doc.closed.count, 1)
+        XCTAssertEqual(doc.tail, "after")
+    }
+
     func testFinishClosesTheTailAndKeepsTrailingWhitespace() {
         var doc = IncrementalMarkdownDocument()
         doc.append("a\n\nb")

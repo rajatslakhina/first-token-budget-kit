@@ -54,8 +54,9 @@ final class CoalescingTests: XCTestCase {
         XCTAssertEqual(c.maxBufferedBytes, 1)
     }
 
-    /// For random delta streams: nothing is lost or reordered, and outside buffer-limit
-    /// flushes the leading-edge coalescer commits at most once per frame interval.
+    /// For 300 random delta streams per strategy: nothing is lost or reordered (every delta is
+    /// distinct), and outside buffer-limit flushes the leading-edge coalescer commits at most
+    /// once per frame interval.
     func testConservationAndCommitRateOverRandomStreams() {
         var rng = SplitMix64(seed: 99)
         for kind in CoalescerKind.allCases {
@@ -72,7 +73,8 @@ final class CoalescingTests: XCTestCase {
                         if let s = c.frame(at: nextFrame) { output += s; commitTimes.append(nextFrame) }
                         nextFrame += frame
                     }
-                    let text = String(repeating: "x", count: Int(rng.next() % 5))
+                    let length = Int(rng.next() % 5)
+                    let text = length == 0 ? "" : "<\(input.count)" + String(repeating: "-", count: length) + ">"
                     input += text
                     if let s = c.ingest(text, at: now) { output += s; commitTimes.append(now) }
                 }
