@@ -43,7 +43,7 @@ extension StreamFixture {
     )
 
     /// The first delta is a bare newline, so the first *visible* character arrives one delta
-    /// later. Render-stage timing must key off visible glyphs, not the first delta.
+    /// later. That wait is server pacing: it belongs to the `firstToken` stage, not `render`.
     public static let whitespaceLead = make(
         name: "whitespace-lead", firstText: Nanos.milliseconds(160), leadingWhitespace: true
     )

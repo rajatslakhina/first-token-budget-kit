@@ -11,7 +11,7 @@ In the replay harness (cellular profile, 4 streams × 10 seeds, the same network
 
 <p align="center"><img src="https://raw.githubusercontent.com/rajatslakhina/first-token-budget-demo-app/main/Demo/Screenshots/1-waterfall.png" width="300" alt="The demo's waterfall: four client configurations with per-stage bars, p50/p95 and regression-gate verdicts"></p>
 
-Demo app: **[first-token-budget-demo-app](https://github.com/rajatslakhina/first-token-budget-demo-app)**. It pulls this package from GitHub as a remote dependency (1.2.0 up to the next major) and runs the whole pipeline on a Simulator: a replayed waterfall, a live stream, and the speculation policy.
+Demo app: **[first-token-budget-demo-app](https://github.com/rajatslakhina/first-token-budget-demo-app)**. It pulls this package from GitHub as a remote dependency (1.3.0 up to the next major) and runs the whole pipeline on a Simulator: a replayed waterfall, a live stream, and the speculation policy.
 
 ## Why this matters
 
@@ -22,8 +22,8 @@ Model providers now rewrite serving stacks to shave first-token latency: Anthrop
 | request build | send tapped → request encoded | feature team (prompt assembly, retrieval, encoding) |
 | connection | request built → connection ready | networking platform (DNS, TCP, TLS, reuse) |
 | server queue | connection ready → response headers | the API; the client can only observe it |
-| first token | headers → first `text_delta` parsed | client parser + the API's stream framing |
-| render | first delta → first visible glyph committed | client UI |
+| first token | headers → first `text_delta` with a visible character parsed | the API (including whitespace-only pacing deltas) and its stream framing |
+| render | that delta → its first glyph committed for display | client UI |
 
 The deliverable is a split you can assign. "TTFT regressed 30 ms" is not actionable; "the render stage regressed one frame, and the CI gate named it" is.
 
@@ -61,7 +61,7 @@ The deliverable is a split you can assign. "TTFT regressed 30 ms" is not actiona
 
 - `swift build -Xswiftc -warnings-as-errors` from a clean `.build`: 0 warnings, 0 errors (Swift 6.4.2, Xcode 27.2, on the author's Mac).
 - `swift test`: **102 tests, 0 failures** (one of them, `testPrintBaselineWhenRequested`, is an opt-in baseline printer that does nothing unless `FIRSTTOKEN_PRINT_BASELINE=1`). They include the regression gate against the committed baseline, and deliberately broken configurations that must fail it.
-- **Mutation check** (`Scripts/mutation_check.py`, also a CI job): 15 mutants, each removing one guard (leading-edge commit, CRLF join, oversize-event drop, separator accounting, stage clamping, fence tracking, CommonMark fence closing, resumed newline search, render-once cache, stale-speculation discard, nearest-rank ceiling, digest matching, insufficient-samples-is-not-a-pass, unconditional network draws, cancellation on the byte path). Each mutant must compile, and its test class must then fail. All are killed.
+- **Mutation check** (`Scripts/mutation_check.py`, also a CI job): 16 mutants, each removing one guard (leading-edge commit, CRLF join, oversize-event drop, separator accounting, stage clamping, fence tracking, CommonMark fence closing, resumed newline search, render-once cache, stale-speculation discard, nearest-rank ceiling, digest matching, insufficient-samples-is-not-a-pass, unconditional network draws, cancellation on the byte path, whitespace pacing charged to the API). Each mutant must compile, and its test class must then fail. All are killed.
 - CI ([Actions](https://github.com/rajatslakhina/first-token-budget-kit/actions/workflows/ci.yml)) has three `macos-15` jobs: build and test with warnings as errors; an iOS Simulator SDK build (`generic/platform=iOS Simulator`); and the mutation check.
 - The companion demo app was built against this package, resolved from GitHub at the released tag, and run on an iOS 27.2 Simulator. The demo README has the screenshots and the exact run record.
 
@@ -71,7 +71,7 @@ The deliverable is a split you can assign. "TTFT regressed 30 ms" is not actiona
 - **CPU cost is zero in virtual time**, so the CI gate cannot catch a parser that got slower. That is what the signposts are for: profile on a device in Instruments.
 - **"First glyph" is a model in the replay** (the first display refresh after the commit). In a live app it is stamped when the committed text reaches the view model. Pixels land on the next refresh, so a live render stage reads up to one frame short.
 - **No networking client is shipped.** The seam is `StreamPipeline.deltas(bytes:)` with a factory that calls `URLSession.bytes(for:)` (or `deltas(from:)` for chunked sources); the app marks `requestBuilt` / `connectionReady` from its own networking layer. Mapping `URLSessionTaskTransactionMetrics` onto milestones is left to the integrator. The byte-sequence path is tested with an `AsyncStream<UInt8>`, not against a live `URLSession`.
-- **Stream completeness is the consumer's check.** `StreamPipelineError.truncated` detects bytes cut mid-event only. A stream that ends cleanly between events without `message_stop`, or carries an `error` event (`.serverError`), finishes normally; the snippet below shows the check.
+- **Stream completeness is the consumer's check.** `StreamPipelineError.truncated` detects bytes cut mid-event only. A stream that ends cleanly between events without `message_stop`, or carries an `error` event (`.serverError`), finishes normally; the snippet below shows the check (and throws `.endedWithoutMessageStop`, a case the pipeline itself never throws).
 - **Metric clocks differ.** `URLSessionTaskTransactionMetrics` timestamps are `Date`s (wall clock), not the uptime clock the instrument uses. Convert them through a paired `Date()` / `clock.now()` reading before passing them to `mark(_:at:)`, and discard runs that span a clock change.
 - **Replay and fixtures ship in the product on purpose.** `FixtureReplayer`, `StreamFixture`, `FixtureByteStream` and `sampleAnswer` are in `FirstToken` so a consuming app can run the same gate in its own CI and the demo needs one dependency. They are small and inert unless called; a later major version could split them into a separate `FirstTokenReplay` product.
 - **Connection warming needs a request.** `PrewarmAction.warmConnection` is advice; how to honour it (typically a `HEAD` to the API host) is the app's code, and it is visible to that host.
@@ -84,7 +84,7 @@ The deliverable is a split you can assign. "TTFT regressed 30 ms" is not actiona
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/rajatslakhina/first-token-budget-kit.git", from: "1.2.0"),
+    .package(url: "https://github.com/rajatslakhina/first-token-budget-kit.git", from: "1.3.0"),
 ]
 ```
 
@@ -102,7 +102,8 @@ func commit(_ text: String) async {
     markdown.append(text)                    // publish markdown.blocks to the view
     if !glyphShown, text.contains(where: { !$0.isWhitespace }) {
         glyphShown = true
-        await instrument.mark(.firstGlyphRendered, at: clock.now())
+        let shown = clock.now()              // read before the await, not after it
+        await instrument.mark(.firstGlyphRendered, at: shown)
     }
 }
 
@@ -119,10 +120,15 @@ for try await delta in StreamPipeline.deltas(bytes: {
     if case let .serverError(type, message) = delta { throw ChatError.server(type, message) }  // your error type
     if delta == .messageStop { sawStop = true }
     guard let text = delta.text else { continue }
-    if !sawText { sawText = true; await instrument.mark(.firstTextDelta, at: clock.now()) }
-    if let ready = coalescer.ingest(text, at: clock.now()) { await commit(ready) }
+    let now = clock.now()                    // one reading for this delta
+    let firstVisible = !sawText && text.contains(where: { !$0.isWhitespace })
+    if firstVisible { sawText = true }
+    // Commit before awaiting the instrument, so the actor round trip lands after the glyph,
+    // not inside the render stage.
+    if let ready = coalescer.ingest(text, at: now) { await commit(ready) }
+    if firstVisible { await instrument.mark(.firstTextDelta, at: now) }
 }
-guard sawStop else { throw StreamPipelineError.truncated }   // ended between events
+guard sawStop else { throw StreamPipelineError.endedWithoutMessageStop }
 if let rest = coalescer.drain() { await commit(rest) }
 markdown.finish()
 

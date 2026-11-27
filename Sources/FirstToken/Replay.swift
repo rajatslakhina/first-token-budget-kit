@@ -115,7 +115,7 @@ public enum ReplayBaseline {
     public static let stages: [Stage: GateBaseline] = [
         .requestBuild: GateBaseline(p50: 0, p95: 0),
         .connection: GateBaseline(p50: 4_076_000, p95: 4_868_000),
-        .render: GateBaseline(p50: 11_688_389, p95: 33_024_218),
+        .render: GateBaseline(p50: 8_898_452, p95: 14_955_125),
     ]
 }
 
@@ -206,7 +206,7 @@ public enum FixtureReplayer {
                 let delta = decoder.decode(event)
                 deltas.append(delta)
                 guard let text = delta.text else { continue }
-                if !sawFirstText {
+                if !sawFirstText, text.containsGlyph {
                     sawFirstText = true
                     timeline.mark(.firstTextDelta, at: arrival)
                 }

@@ -1,7 +1,9 @@
 /// The six instants that define time-to-first-token, in the order they happen on a cold request.
 ///
 /// TTFT is measured from `sendCommitted` (the user's tap) to `firstGlyphRendered` (the first
-/// non-whitespace character reaching the screen). The two milestones that can legitimately be
+/// non-whitespace character reaching the screen). `firstTextDelta` is the first text delta
+/// that carries a visible character: whitespace-only deltas before it are server pacing, so
+/// they count toward the API's `firstToken` stage, not the client's `render` stage. The two milestones that can legitimately be
 /// reached *before* the tap are `requestBuilt` and `connectionReady`: that is what speculative
 /// prompt assembly and connection pre-warming buy you.
 public enum Milestone: Int, CaseIterable, Sendable, Codable, Comparable {
@@ -24,7 +26,7 @@ public enum Milestone: Int, CaseIterable, Sendable, Codable, Comparable {
         case .requestBuilt: "request built"
         case .connectionReady: "connection ready"
         case .headersReceived: "headers received"
-        case .firstTextDelta: "first text delta"
+        case .firstTextDelta: "first visible text delta"
         case .firstGlyphRendered: "first glyph rendered"
         }
     }
@@ -40,10 +42,11 @@ public enum Stage: Int, CaseIterable, Sendable, Codable {
     case connection
     /// Request sent until response headers. Owner: the API; the client cannot change it.
     case serverQueue
-    /// Headers until the first *text* delta is parsed. Includes `message_start`, `ping` and
-    /// any delta that arrived split across chunks.
+    /// Headers until the first text delta carrying a visible character is parsed. Includes
+    /// `message_start`, `ping`, whitespace-only deltas and any delta that arrived split across
+    /// chunks. Owner: the API and its stream framing; the client parser can only add to it.
     case firstToken
-    /// Parsed delta until the first glyph is committed for display. Owner: the client UI.
+    /// That delta parsed until its first glyph is committed for display. Owner: the client UI.
     case render
 
     public var start: Milestone {

@@ -82,6 +82,10 @@ public struct AnthropicEventDecoder: Sendable {
 public enum StreamPipelineError: Error, Sendable, Equatable {
     /// The byte stream ended in the middle of an event.
     case truncated
+    /// The stream ended cleanly between events but never sent `message_stop`. The pipeline
+    /// does not track message lifecycle, so it never throws this itself; consumers that check
+    /// for `.messageStop` throw it (see the README usage).
+    case endedWithoutMessageStop
 }
 
 /// Turns a byte stream into a stream of decoded deltas.

@@ -34,11 +34,14 @@ final class ReplayTests: XCTestCase {
         XCTAssertEqual(split.duration(of: .firstToken), Nanos.milliseconds(190), "150 ms + the 40 ms gap")
     }
 
-    func testRenderWaitsForAVisibleGlyphNotTheFirstDelta() throws {
+    /// A whitespace-only first delta is server pacing: the wait for the first visible delta is
+    /// charged to `firstToken` (the API), and `render` (the client) stays under one frame.
+    func testWhitespaceLeadIsChargedToFirstTokenNotRender() throws {
         let config = ReplayConfiguration(profile: .init(requestBuild: 0, coldConnect: 0, warmConnect: 0, serverQueue: 0, jitterPermille: 0),
                                          prewarmConnection: false, speculativePromptHit: false, coalescer: .leadingEdge)
         let lead = try XCTUnwrap(FixtureReplayer.run(.whitespaceLead, configuration: config, seed: 0).breakdown)
-        XCTAssertGreaterThanOrEqual(lead.duration(of: .render), Nanos.milliseconds(22), "the glyph comes one delta (22 ms) later")
+        XCTAssertEqual(lead.duration(of: .firstToken), Nanos.milliseconds(182), "160 ms + one 22 ms delta")
+        XCTAssertLessThanOrEqual(lead.duration(of: .render), config.frameInterval)
     }
 
     func testLeadingEdgeNeverRendersLaterThanTrailingEdgeOnTheSameRun() throws {
