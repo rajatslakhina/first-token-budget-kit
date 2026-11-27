@@ -252,8 +252,10 @@ public enum FixtureReplayer {
 }
 
 /// Plays a fixture back as an `AsyncSequence` of byte chunks in real time (scaled by
-/// `timeScalePermille`; 1,000 = recorded speed). The demo feeds this into `StreamPipeline`
-/// exactly as it would feed `URLSession` bytes.
+/// `timeScalePermille`; 1,000 = recorded speed), each chunk at an absolute deadline from the
+/// first pull. Time before that first pull (the consumer starting the pipeline) is not part
+/// of the fixture's offsets, so in a live run it shows up in `firstToken`. The demo feeds
+/// this into `StreamPipeline` exactly as it would feed `URLSession` bytes.
 public struct FixtureByteStream: AsyncSequence, Sendable {
     public typealias Element = [UInt8]
 
@@ -269,16 +271,22 @@ public struct FixtureByteStream: AsyncSequence, Sendable {
         let chunks: [FixtureChunk]
         let scale: UInt64
         var index = 0
-        var elapsed: UInt64 = 0
+        /// Playback time zero: the first `next()` call. Every chunk sleeps to an absolute
+        /// deadline from here with zero tolerance, so timer slack doesn't accumulate.
+        var start: ContinuousClock.Instant?
 
         public mutating func next() async throws -> [UInt8]? {
             guard chunks.indices.contains(index) else { return nil }
             let chunk = chunks[index]
             index += 1
+            let clock = ContinuousClock()
+            let origin = start ?? clock.now
+            start = origin
             let target = Saturating.scale(chunk.offset, by: scale, over: 1_000)
-            let wait = Saturating.sub(target, elapsed)
-            elapsed = Swift.max(elapsed, target)
-            if wait > 0 { try await Task.sleep(nanoseconds: wait) }
+            let deadline = origin.advanced(by: .nanoseconds(Int(clamping: target)))
+            if clock.now < deadline {
+                try await clock.sleep(until: deadline, tolerance: .zero)
+            }
             return chunk.bytes
         }
     }

@@ -21,8 +21,9 @@ public protocol CoalescingStrategy: Sendable {
 /// together on the next frame.
 ///
 /// Guarantees (tested): the first visible delta is never held, even after a whitespace-only
-/// lead; at most one glyph-bearing commit per frame interval except for buffer-limit flushes; the concatenation of commits equals the concatenation of
-/// inputs; held text is flushed as soon as it reaches `maxBufferedBytes`.
+/// lead; at most one glyph-bearing commit per frame interval, except for buffer-limit
+/// flushes; the concatenation of commits equals the concatenation of inputs; held text is
+/// flushed as soon as it reaches `maxBufferedBytes`.
 public struct LeadingEdgeCoalescer: CoalescingStrategy {
     public let frameInterval: UInt64
     public let maxBufferedBytes: Int

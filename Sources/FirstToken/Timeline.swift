@@ -5,8 +5,9 @@
 /// that carries a visible character: whitespace-only deltas before it are server pacing, so
 /// they count toward the API's `firstToken` stage, not the client's `render` stage.
 ///
-/// The two milestones that can legitimately be reached *before* the tap are `requestBuilt` and `connectionReady`: that is what speculative
-/// prompt assembly and connection pre-warming buy you.
+/// The two milestones that can legitimately be reached *before* the tap are `requestBuilt`
+/// and `connectionReady`: that is what speculative prompt assembly and connection
+/// pre-warming buy you.
 public enum Milestone: Int, CaseIterable, Sendable, Codable, Comparable {
     case sendCommitted
     case requestBuilt

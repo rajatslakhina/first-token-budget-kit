@@ -17,6 +17,14 @@ final class CoalescingTests: XCTestCase {
         XCTAssertNil(c.ingest("!", at: 2_000), "the glyph commit did spend it")
     }
 
+    func testAWhitespaceFlushDoesNotSpendTheFrame() {
+        var c = LeadingEdgeCoalescer(frameInterval: frame)
+        _ = c.ingest("a", at: 0)
+        XCTAssertNil(c.ingest("\n", at: 1_000))
+        XCTAssertEqual(c.frame(at: frame), "\n")
+        XCTAssertEqual(c.ingest("b", at: frame + 1), "b", "a whitespace flush must not spend the frame")
+    }
+
     func testTrailingEdgeHoldsTheFirstDeltaUntilTheNextFrame() {
         var c = TrailingEdgeCoalescer()
         XCTAssertNil(c.ingest("Hel", at: 1_000))
