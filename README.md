@@ -11,7 +11,7 @@ In the replay harness (cellular profile, 4 streams × 10 seeds, the same network
 
 <p align="center"><img src="https://raw.githubusercontent.com/rajatslakhina/first-token-budget-demo-app/main/Demo/Screenshots/1-waterfall.png" width="300" alt="The demo's waterfall: four client configurations with per-stage bars, p50/p95 and regression-gate verdicts"></p>
 
-Demo app: **[first-token-budget-demo-app](https://github.com/rajatslakhina/first-token-budget-demo-app)**. It pulls this package from GitHub as a remote dependency (1.3.2 up to the next major) and runs the whole pipeline on a Simulator: a replayed waterfall, a live stream, and the speculation policy.
+Demo app: **[first-token-budget-demo-app](https://github.com/rajatslakhina/first-token-budget-demo-app)**. It pulls this package from GitHub as a remote dependency (1.3.3 up to the next major) and runs the whole pipeline on a Simulator: a replayed waterfall, a live stream, and the speculation policy.
 
 ## Why this matters
 
@@ -60,8 +60,8 @@ The deliverable is a split you can assign. "TTFT regressed 30 ms" is not actiona
 ## Verification
 
 - `swift build -Xswiftc -warnings-as-errors` from a clean `.build`: 0 warnings, 0 errors (Swift 6.4.2, Xcode 27.2, on the author's Mac).
-- `swift test`: **104 tests, 0 failures** (one of them, `testPrintBaselineWhenRequested`, is an opt-in baseline printer that does nothing unless `FIRSTTOKEN_PRINT_BASELINE=1`). They include the regression gate against the committed baseline, and deliberately broken configurations that must fail it.
-- **Mutation check** (`Scripts/mutation_check.py`, also a CI job): 18 mutants, each removing one guard (leading-edge commit, whitespace commits and whitespace flushes not spending the frame, CRLF join, oversize-event drop, separator accounting, stage clamping, fence tracking, CommonMark fence closing, resumed newline search, render-once cache, stale-speculation discard, nearest-rank ceiling, digest matching, insufficient-samples-is-not-a-pass, unconditional network draws, cancellation on the byte path, whitespace pacing charged to the API). Each mutant must compile, and its test class must then fail. All are killed.
+- `swift test`: **106 tests, 0 failures** (one of them, `testPrintBaselineWhenRequested`, is an opt-in baseline printer that does nothing unless `FIRSTTOKEN_PRINT_BASELINE=1`). They include the regression gate against the committed baseline, and deliberately broken configurations that must fail it.
+- **Mutation check** (`Scripts/mutation_check.py`, also a CI job): 19 mutants, each removing one guard (leading-edge commit, whitespace commits and whitespace flushes not spending the frame, CRLF join, oversize-event drop, separator accounting, stage clamping, fence tracking, CommonMark fence closing, resumed newline search, render-once cache, stale-speculation discard, nearest-rank ceiling, digest matching, insufficient-samples-is-not-a-pass, unconditional network draws, cancellation on the byte path, whitespace pacing charged to the API, one playback origin for the fixture player). Each mutant must compile, and its test class must then fail. All are killed.
 - CI ([Actions](https://github.com/rajatslakhina/first-token-budget-kit/actions/workflows/ci.yml)) has three `macos-15` jobs: build and test with warnings as errors; an iOS Simulator SDK build (`generic/platform=iOS Simulator`); and the mutation check.
 - The companion demo app was built against this package, resolved from GitHub at the released tag, and run on an iOS 27.2 Simulator. The demo README has the screenshots and the exact run record.
 
@@ -85,7 +85,7 @@ The deliverable is a split you can assign. "TTFT regressed 30 ms" is not actiona
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/rajatslakhina/first-token-budget-kit.git", from: "1.3.2"),
+    .package(url: "https://github.com/rajatslakhina/first-token-budget-kit.git", from: "1.3.3"),
 ]
 ```
 

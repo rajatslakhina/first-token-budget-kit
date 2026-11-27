@@ -111,6 +111,35 @@ final class ReplayTests: XCTestCase {
         XCTAssertTrue(FixtureReplayer.totals([empty], configuration: .shipped, seeds: seeds).isEmpty)
     }
 
+    func testPlaybackDeadlinesAreOriginPlusScaledOffset() {
+        let origin = ContinuousClock.now
+        XCTAssertEqual(FixtureByteStream.deadline(forOffset: Nanos.milliseconds(30), scale: 1_000, origin: origin),
+                       origin.advanced(by: .milliseconds(30)))
+        XCTAssertEqual(FixtureByteStream.deadline(forOffset: Nanos.milliseconds(30), scale: 500, origin: origin),
+                       origin.advanced(by: .milliseconds(15)))
+        XCTAssertEqual(FixtureByteStream.deadline(forOffset: .max, scale: 1_000, origin: origin),
+                       origin.advanced(by: .nanoseconds(Int.max)), "saturates instead of trapping")
+    }
+
+    /// Lateness must not accumulate: a consumer that is 100 ms slow to pull the second chunk
+    /// (due at 200 ms) gets it at ~200 ms from the first pull, not 100 ms + 200 ms. A
+    /// relative-sleep player takes ~300 ms.
+    func testPlaybackDoesNotAccumulateLateness() async throws {
+        let fixture = StreamFixture(name: "two", chunks: [
+            FixtureChunk(offset: 0, bytes: [0x61]),
+            FixtureChunk(offset: Nanos.milliseconds(200), bytes: [0x62]),
+        ])
+        var iterator = FixtureByteStream(fixture).makeAsyncIterator()
+        let clock = ContinuousClock()
+        let first = clock.now
+        _ = try await iterator.next()
+        try await Task.sleep(nanoseconds: Nanos.milliseconds(100))
+        _ = try await iterator.next()
+        let elapsed = clock.now - first
+        XCTAssertGreaterThanOrEqual(elapsed, .milliseconds(200))
+        XCTAssertLessThan(elapsed, .milliseconds(270), "lateness accumulated: \(elapsed)")
+    }
+
     func testRealTimePlaybackPreservesBytesAndOrder() async throws {
         var collected: [UInt8] = []
         for try await chunk in FixtureByteStream(.crlfWithKeepAlives, timeScalePermille: 10) { collected += chunk }

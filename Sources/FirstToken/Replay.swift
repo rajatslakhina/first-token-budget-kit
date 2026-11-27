@@ -282,8 +282,7 @@ public struct FixtureByteStream: AsyncSequence, Sendable {
             let clock = ContinuousClock()
             let origin = start ?? clock.now
             start = origin
-            let target = Saturating.scale(chunk.offset, by: scale, over: 1_000)
-            let deadline = origin.advanced(by: .nanoseconds(Int(clamping: target)))
+            let deadline = FixtureByteStream.deadline(forOffset: chunk.offset, scale: scale, origin: origin)
             if clock.now < deadline {
                 try await clock.sleep(until: deadline, tolerance: .zero)
             }
@@ -293,5 +292,12 @@ public struct FixtureByteStream: AsyncSequence, Sendable {
 
     public func makeAsyncIterator() -> AsyncIterator {
         AsyncIterator(chunks: fixture.chunks, scale: timeScalePermille)
+    }
+
+    /// A chunk's playback deadline: the origin plus its scaled offset. It depends only on the
+    /// origin, never on when the previous chunk actually woke, which is what keeps lateness
+    /// from accumulating.
+    static func deadline(forOffset offset: UInt64, scale: UInt64, origin: ContinuousClock.Instant) -> ContinuousClock.Instant {
+        origin.advanced(by: .nanoseconds(Int(clamping: Saturating.scale(offset, by: scale, over: 1_000))))
     }
 }
