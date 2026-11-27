@@ -105,6 +105,10 @@ public struct ReplayResult: Sendable, Equatable {
 /// the same change, where a reviewer sees them move.
 public enum ReplayBaseline {
     public static let seeds: Range<UInt64> = 0..<10
+    /// Runs per configuration (fixtures × seeds). Use it as the gate's `minimumSamples`: a
+    /// regression that stops some runs from ever rendering a glyph drops those runs from the
+    /// sample set, and must fail the gate rather than be judged on the survivors.
+    public static var sampleCount: Int { seeds.count * StreamFixture.standard.count }
     public static let total = GateBaseline(p50: 499_942_335, p95: 591_057_358)
     /// The client-owned stages. `serverQueue` and `firstToken` belong to the API and to the
     /// fixtures; gating them would gate the fixture, not the client.

@@ -5,7 +5,8 @@ import XCTest
 /// committed baseline; the regressions below are deliberate, to prove the gate fails on them.
 final class TTFTGateTests: XCTestCase {
     private let seeds = ReplayBaseline.seeds
-    private let gate = RegressionGate()
+    /// Every run must produce a breakdown: a regression that loses runs fails on sample count.
+    private let gate = RegressionGate(minimumSamples: ReplayBaseline.sampleCount)
 
     private func breakdowns(_ config: ReplayConfiguration) -> [TTFTBreakdown] {
         FixtureReplayer.breakdowns(StreamFixture.standard, configuration: config, seeds: seeds)
@@ -18,6 +19,11 @@ final class TTFTGateTests: XCTestCase {
 
     private func totalPasses(_ config: ReplayConfiguration) -> Bool {
         gate.evaluate(baseline: ReplayBaseline.total, candidate: breakdowns(config).map(\.total)).passed
+    }
+
+    func testARegressionThatLosesRunsFailsOnSampleCount() {
+        let survivors = Array(breakdowns(.shipped).map(\.total).prefix(ReplayBaseline.sampleCount - 1))
+        XCTAssertEqual(gate.evaluate(baseline: ReplayBaseline.total, candidate: survivors).status, .insufficientSamples)
     }
 
     func testShippedPipelineHoldsTheCommittedBaseline() {

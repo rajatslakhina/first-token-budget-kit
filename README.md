@@ -11,11 +11,11 @@ In the replay harness (cellular profile, 4 streams × 10 seeds, the same network
 
 <p align="center"><img src="https://raw.githubusercontent.com/rajatslakhina/first-token-budget-demo-app/main/Demo/Screenshots/1-waterfall.png" width="300" alt="The demo's waterfall: four client configurations with per-stage bars, p50/p95 and regression-gate verdicts"></p>
 
-Demo app: **[first-token-budget-demo-app](https://github.com/rajatslakhina/first-token-budget-demo-app)**. It pulls this package from GitHub as a remote dependency (1.1.0 up to the next major) and runs the whole pipeline on a Simulator: a replayed waterfall, a live stream, and the speculation policy.
+Demo app: **[first-token-budget-demo-app](https://github.com/rajatslakhina/first-token-budget-demo-app)**. It pulls this package from GitHub as a remote dependency (1.2.0 up to the next major) and runs the whole pipeline on a Simulator: a replayed waterfall, a live stream, and the speculation policy.
 
 ## Why this matters
 
-Model providers now rewrite serving stacks to shave first-token latency (see Anthropic's [write-up on migrating the Claude API to Rust](https://www.anthropic.com/research/migrating-api-to-rust)). That is the number users feel. On a phone, though, much of the TTFT is spent before the request reaches the provider, or after the first byte comes back:
+Model providers now rewrite serving stacks to shave first-token latency: Anthropic's [write-up on migrating its Messages API to Rust](https://www.anthropic.com/research/migrating-api-to-rust) reports about 20% lower median time to first token. That is the number users feel. On a phone, though, much of the TTFT is spent before the request reaches the provider, or after the first byte comes back:
 
 | Stage | From → to | Who owns it |
 |---|---|---|
@@ -36,11 +36,11 @@ The deliverable is a split you can assign. "TTFT regressed 30 ms" is not actiona
 | `TTFTBudget`, `BudgetReport` | A total plus per-stage caps. Reports overruns, the excess over the total, and the dominant stage. `serverQueue` is left unbudgeted on purpose. |
 | `SSEParser` | Incremental, byte-level `text/event-stream` parser, written from the WHATWG spec: LF/CR/CRLF (including a CRLF split across reads), BOM, comments, multi-line `data:`, last-event-ID, and bounded memory. A line or an event (join separators included) longer than `maxEventBytes` drops the whole event; it is never delivered truncated. |
 | `AnthropicEventDecoder`, `StreamDelta` | Messages-API stream events → `text`, `messageStart`, `ping`, `blockStop`, `messageStop`, in-stream `serverError`, `ignored` (thinking/tool deltas), `malformed`. |
-| `StreamPipeline.deltas(from:)` / `deltas(bytes:)` | An `AsyncSequence` of byte chunks, or a factory for a byte sequence such as `URLSession.AsyncBytes`, → `AsyncThrowingStream<StreamDelta>`. Parsing runs on a detached task, never on the caller's actor (tested with a probe inside the parse step while consuming from `@MainActor`). Cancelling the consumer stops the source being pulled (tested). |
+| `StreamPipeline.deltas(from:)` / `deltas(bytes:)` | An `AsyncSequence` of byte chunks, or a factory for a byte sequence such as `URLSession.AsyncBytes`, → `AsyncThrowingStream<StreamDelta>`. Parsing runs on a detached task, never on the caller's actor (tested with a probe inside the parse step while consuming from `@MainActor`). Cancelling the consumer stops the source being pulled (tested on both paths, including a byte source that ignores cancellation). |
 | `LeadingEdgeCoalescer` (+ `TrailingEdgeCoalescer` baseline) | Coalesces token deltas to the display refresh **without holding the first one**. |
 | `IncrementalMarkdownDocument`, `StreamingMarkdown` | Splits the growing answer into closed blocks and one open tail. Blank lines inside fenced code don't close the block, and fences close by CommonMark's rule (same marker, at least as long, no info string). Each closed block is rendered exactly once; only the tail re-renders. Segmentation is linear: each byte is searched once, even across appends to an unterminated line. |
 | `PrewarmPolicy`, `TokenBucket`, `PromptDigest` | Speculation under a budget: asks for a warm connection on composer focus, assembles the prompt on a typing pause, discards it on the next edit, and reports hit rate and waste. |
-| `RegressionGate`, `GateBaseline`, `Percentile`, `ReplayBaseline` | Nearest-rank p50/p95 gate against a committed baseline, on the total **and per stage**. Too few samples is a failure, not a pass. `ReplayBaseline` is the committed baseline itself, public so the demo gates against the same numbers CI does. |
+| `RegressionGate`, `GateBaseline`, `Percentile`, `ReplayBaseline` | Nearest-rank p50/p95 gate against a committed baseline, on the total **and per stage**. Too few samples is a failure, not a pass. `ReplayBaseline` is the committed baseline itself, public so the demo gates against the same numbers CI does; its `sampleCount` is the gate's minimum, so a regression that loses runs fails instead of being judged on the survivors. |
 | `FixtureReplayer`, `StreamFixture`, `FixtureByteStream` | Replays byte-exact streams through the real parser, decoder and coalescer in virtual time, deterministically, so the gate can run in CI. Every configuration replayed with the same seed sees the same network draws (tested), so a comparison measures the client, not the dice. `FixtureByteStream` plays the same fixtures in real time for the demo; `StreamFixture.burst` sends deltas faster than a frame so coalescing is visible. |
 
 ## Design decisions (and what was rejected)
@@ -60,8 +60,8 @@ The deliverable is a split you can assign. "TTFT regressed 30 ms" is not actiona
 ## Verification
 
 - `swift build -Xswiftc -warnings-as-errors` from a clean `.build`: 0 warnings, 0 errors (Swift 6.4.2, Xcode 27.2, on the author's Mac).
-- `swift test`: **100 tests, 0 failures** (one of them, `testPrintBaselineWhenRequested`, is an opt-in baseline printer that does nothing unless `FIRSTTOKEN_PRINT_BASELINE=1`). They include the regression gate against the committed baseline, and deliberately broken configurations that must fail it.
-- **Mutation check** (`Scripts/mutation_check.py`, also a CI job): 14 mutants, each removing one guard (leading-edge commit, CRLF join, oversize-event drop, separator accounting, stage clamping, fence tracking, CommonMark fence closing, resumed newline search, render-once cache, stale-speculation discard, nearest-rank ceiling, digest matching, insufficient-samples-is-not-a-pass, unconditional network draws). Each mutant must compile, and its test class must then fail. All are killed.
+- `swift test`: **102 tests, 0 failures** (one of them, `testPrintBaselineWhenRequested`, is an opt-in baseline printer that does nothing unless `FIRSTTOKEN_PRINT_BASELINE=1`). They include the regression gate against the committed baseline, and deliberately broken configurations that must fail it.
+- **Mutation check** (`Scripts/mutation_check.py`, also a CI job): 15 mutants, each removing one guard (leading-edge commit, CRLF join, oversize-event drop, separator accounting, stage clamping, fence tracking, CommonMark fence closing, resumed newline search, render-once cache, stale-speculation discard, nearest-rank ceiling, digest matching, insufficient-samples-is-not-a-pass, unconditional network draws, cancellation on the byte path). Each mutant must compile, and its test class must then fail. All are killed.
 - CI ([Actions](https://github.com/rajatslakhina/first-token-budget-kit/actions/workflows/ci.yml)) has three `macos-15` jobs: build and test with warnings as errors; an iOS Simulator SDK build (`generic/platform=iOS Simulator`); and the mutation check.
 - The companion demo app was built against this package, resolved from GitHub at the released tag, and run on an iOS 27.2 Simulator. The demo README has the screenshots and the exact run record.
 
@@ -71,6 +71,9 @@ The deliverable is a split you can assign. "TTFT regressed 30 ms" is not actiona
 - **CPU cost is zero in virtual time**, so the CI gate cannot catch a parser that got slower. That is what the signposts are for: profile on a device in Instruments.
 - **"First glyph" is a model in the replay** (the first display refresh after the commit). In a live app it is stamped when the committed text reaches the view model. Pixels land on the next refresh, so a live render stage reads up to one frame short.
 - **No networking client is shipped.** The seam is `StreamPipeline.deltas(bytes:)` with a factory that calls `URLSession.bytes(for:)` (or `deltas(from:)` for chunked sources); the app marks `requestBuilt` / `connectionReady` from its own networking layer. Mapping `URLSessionTaskTransactionMetrics` onto milestones is left to the integrator. The byte-sequence path is tested with an `AsyncStream<UInt8>`, not against a live `URLSession`.
+- **Stream completeness is the consumer's check.** `StreamPipelineError.truncated` detects bytes cut mid-event only. A stream that ends cleanly between events without `message_stop`, or carries an `error` event (`.serverError`), finishes normally; the snippet below shows the check.
+- **Metric clocks differ.** `URLSessionTaskTransactionMetrics` timestamps are `Date`s (wall clock), not the uptime clock the instrument uses. Convert them through a paired `Date()` / `clock.now()` reading before passing them to `mark(_:at:)`, and discard runs that span a clock change.
+- **Replay and fixtures ship in the product on purpose.** `FixtureReplayer`, `StreamFixture`, `FixtureByteStream` and `sampleAnswer` are in `FirstToken` so a consuming app can run the same gate in its own CI and the demo needs one dependency. They are small and inert unless called; a later major version could split them into a separate `FirstTokenReplay` product.
 - **Connection warming needs a request.** `PrewarmAction.warmConnection` is advice; how to honour it (typically a `HEAD` to the API host) is the app's code, and it is visible to that host.
 - **No MetricKit integration**, and no XCTest `measure` baselines. Field percentiles need your own telemetry pipeline.
 - `StreamPipeline`'s output stream buffers without bound, by design (a dropped text delta is data loss). Don't attach a consumer that can stall for seconds.
@@ -81,7 +84,7 @@ The deliverable is a split you can assign. "TTFT regressed 30 ms" is not actiona
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/rajatslakhina/first-token-budget-kit.git", from: "1.1.0"),
+    .package(url: "https://github.com/rajatslakhina/first-token-budget-kit.git", from: "1.2.0"),
 ]
 ```
 
@@ -107,15 +110,19 @@ func commit(_ text: String) async {
 await instrument.mark(.sendCommitted, at: clock.now())
 // ... mark .requestBuilt and .connectionReady from your networking layer
 var sawText = false
+var sawStop = false
 for try await delta in StreamPipeline.deltas(bytes: {
     let (bytes, _) = try await URLSession.shared.bytes(for: request)
-    await instrument.mark(.headersReceived)
+    await instrument.mark(.headersReceived, at: clock.now())
     return bytes
 }) {
+    if case let .serverError(type, message) = delta { throw ChatError.server(type, message) }  // your error type
+    if delta == .messageStop { sawStop = true }
     guard let text = delta.text else { continue }
     if !sawText { sawText = true; await instrument.mark(.firstTextDelta, at: clock.now()) }
     if let ready = coalescer.ingest(text, at: clock.now()) { await commit(ready) }
 }
+guard sawStop else { throw StreamPipelineError.truncated }   // ended between events
 if let rest = coalescer.drain() { await commit(rest) }
 markdown.finish()
 

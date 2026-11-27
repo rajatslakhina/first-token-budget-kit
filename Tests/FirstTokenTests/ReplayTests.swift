@@ -115,7 +115,7 @@ final class ReplayTests: XCTestCase {
     }
 
     /// Prints fresh baseline numbers. Run with FIRSTTOKEN_PRINT_BASELINE=1 after an
-    /// intentional pipeline change, review the diff, and update `TTFTBaseline`.
+    /// intentional pipeline change, review the diff, and update `ReplayBaseline`.
     func testPrintBaselineWhenRequested() {
         guard ProcessInfo.processInfo.environment["FIRSTTOKEN_PRINT_BASELINE"] == "1" else { return }
         var trailing = ReplayConfiguration.shipped

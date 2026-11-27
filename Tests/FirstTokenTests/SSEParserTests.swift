@@ -45,7 +45,7 @@ final class SSEParserTests: XCTestCase {
     }
 
     func testEveryChunkBoundaryGivesTheSameEventsAsOneRead() {
-        for fixture in StreamFixture.standard {
+        for fixture in StreamFixture.standard + [.burst] {
             let all = fixture.chunks.flatMap(\.bytes)
             var whole = SSEParser()
             XCTAssertEqual(parseByteByByte(all), whole.feed(all), fixture.name)

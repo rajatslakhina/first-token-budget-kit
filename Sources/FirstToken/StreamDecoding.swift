@@ -88,6 +88,11 @@ public enum StreamPipelineError: Error, Sendable, Equatable {
 public enum StreamPipeline {
     /// Deltas from any `AsyncSequence` of byte chunks (a fixture, a socket reader, a test).
     ///
+    /// `StreamPipelineError.truncated` means the bytes stopped in the middle of an event. A
+    /// stream that ends cleanly *between* events without `message_stop`, or that carries an
+    /// `error` event, finishes normally: check for `.messageStop` and `.serverError` yourself
+    /// before treating the answer as complete.
+    ///
     /// Parsing and JSON decoding run on a detached task, never on the caller's actor, so a
     /// burst of deltas cannot hitch the main thread. Cancelling the consumer (or dropping the
     /// stream) cancels the parsing task, which stops pulling from the source.
@@ -113,7 +118,7 @@ public enum StreamPipeline {
     /// ```swift
     /// StreamPipeline.deltas(bytes: {
     ///     let (bytes, _) = try await session.bytes(for: request)
-    ///     await instrument.mark(.headersReceived)
+    ///     await instrument.mark(.headersReceived, at: clock.now())
     ///     return bytes
     /// })
     /// ```
@@ -171,6 +176,9 @@ public enum StreamPipeline {
                 do {
                     let bytes = try await makeBytes()
                     for try await byte in bytes {
+                        // Checked per byte: a source that ignores cancellation must not keep
+                        // being pulled while a long event is still accumulating.
+                        if Task.isCancelled { throw CancellationError() }
                         let events = parser.feed(CollectionOfOne(byte))
                         guard !events.isEmpty else { continue }
                         try Task.checkCancellation()

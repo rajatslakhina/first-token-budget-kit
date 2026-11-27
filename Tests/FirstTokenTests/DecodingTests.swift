@@ -103,6 +103,20 @@ final class DecodingTests: XCTestCase {
         }
     }
 
+    func testCancellingTheConsumerStopsPullingFromTheByteSource() async throws {
+        let source = EndlessBytes(pulls: EndlessBytes.Pulls())
+        let consumer = Task {
+            for try await _ in StreamPipeline.deltas(bytes: { source }, maxEventBytes: .max) {}
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        consumer.cancel()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let afterStop = source.pulls.count.withLock { $0 }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertGreaterThan(afterStop, 0)
+        XCTAssertEqual(source.pulls.count.withLock { $0 }, afterStop, "byte source keeps being pulled after cancellation")
+    }
+
     func testCancellingTheConsumerStopsPullingFromTheSource() async throws {
         let pulls = Mutex(0)
         let source = RecordingChunks(chunks: Array(repeating: Array("data: {\"type\":\"ping\"}\n\n".utf8), count: 10_000),
@@ -121,6 +135,27 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(pulls.withLock { $0 }, afterStop, "source keeps being pulled after the consumer left")
         XCTAssertLessThan(afterStop, 10_000)
     }
+}
+
+/// An endless byte source that ignores cancellation and counts how often it is pulled.
+struct EndlessBytes: AsyncSequence, Sendable {
+    typealias Element = UInt8
+    let pulls: Pulls
+
+    final class Pulls: Sendable {
+        let count = Mutex(0)
+    }
+
+    struct AsyncIterator: AsyncIteratorProtocol {
+        let pulls: Pulls
+        mutating func next() async -> UInt8? {
+            pulls.count.withLock { $0 += 1 }
+            await Task.yield()
+            return 0x61 // "a", never a newline: one event that never ends
+        }
+    }
+
+    func makeAsyncIterator() -> AsyncIterator { AsyncIterator(pulls: pulls) }
 }
 
 /// An async chunk source that reports the thread each `next()` runs on.
